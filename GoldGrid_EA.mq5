@@ -1,10 +1,10 @@
 //+------------------------------------------------------------------+
-//| GoldGrid_EA.mq5 v3.0 - Trend Core + Grid Overlay + Compounding  |
+//| GoldGrid_EA.mq5 v3.1 - Trend Core + Grid Overlay + Compounding  |
 //| Core rides trend with trailing SL | Grid captures pullbacks       |
-//| Dynamic lot sizing based on equity growth                         |
+//| v3.1: Core skips ranging markets (EMA separation filter)          |
 //+------------------------------------------------------------------+
 #property copyright "GoldGrid"
-#property version   "3.00"
+#property version   "3.10"
 
 #include <Trade/Trade.mqh>
 
@@ -28,18 +28,19 @@ input double   InpRSI_Entry       = 40.0;
 input double   InpRSI_Avoid       = 65.0;
 
 input group "=== Core Trend Position ==="
-input bool     InpEnableCore      = true;
+input bool     InpEnableCore      = false;
 input double   InpTrailATRMult    = 1.5;
+input double   InpCoreEMASepATR   = 0.7;
 
 input group "=== Grid Structure ==="
 input double   InpGridSpacing     = 6.0;
 input int      InpOrdersPerTier   = 3;
 input int      InpMaxTiers        = 3;
 input double   InpLotMultiplier   = 1.5;
-input int      InpMaxGridsPerDay  = 2;
+input int      InpMaxGridsPerDay  = 3;
 
 input group "=== Grid Take Profit ==="
-input double   InpTPFromAvg       = 5.0;
+input double   InpTPFromAvg       = 8.0;
 input double   InpTPMinProfit     = 0.0;
 
 input group "=== Cooldown ==="
@@ -154,6 +155,14 @@ bool IsTrendUp() {
    double emaSlow = Ind(g_hH1EMASlow, 0, 1);
    if(emaFast <= 0 || emaSlow <= 0) return false;
    return (emaFast > emaSlow);
+}
+
+bool IsTrendStrong() {
+   double emaFast = Ind(g_hH1EMAFast, 0, 1);
+   double emaSlow = Ind(g_hH1EMASlow, 0, 1);
+   double h1atr   = Ind(g_hH1ATR, 0, 1);
+   if(emaFast <= 0 || emaSlow <= 0 || h1atr <= 0) return false;
+   return (emaFast - emaSlow >= h1atr * InpCoreEMASepATR);
 }
 
 bool CheckGridEntrySignal() {
@@ -440,9 +449,9 @@ int OnInit() {
       }
    }
    ScanForCoreTicket();
-   PrintFormat("[GG] v3.0 Core+Grid+Compound. Lot=%.2f Equity/Lot=%.0f Core=%s Trail=%.1fATR Grid=$%.1f %dx%d",
+   PrintFormat("[GG] v3.1 Core+Grid+Compound. Lot=%.2f Equity/Lot=%.0f Core=%s Trail=%.1fATR EMASep=%.1fATR Grid=$%.1f %dx%d",
               InpBaseLot, InpEquityPerLot, InpEnableCore ? "ON" : "OFF",
-              InpTrailATRMult, InpGridSpacing, InpMaxTiers, InpOrdersPerTier);
+              InpTrailATRMult, InpCoreEMASepATR, InpGridSpacing, InpMaxTiers, InpOrdersPerTier);
    return INIT_SUCCEEDED;
 }
 
@@ -529,8 +538,8 @@ void OnTick() {
       }
    }
    if(!IsSessionActive() || !IsSpreadOK()) return;
-   //--- CORE: open if trend up and no core ---
-   if(!hasCore && InpEnableCore && IsTrendUp()) {
+   //--- CORE: open if trend up + strong separation, skip ranging ---
+   if(!hasCore && InpEnableCore && IsTrendUp() && IsTrendStrong()) {
       if(TimeCurrent() - g_lastCoreClose >= InpCooldownCoreReopen) {
          double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
          double emaFast = Ind(g_hH1EMAFast, 0, 1);
