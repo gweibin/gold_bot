@@ -1,10 +1,10 @@
 //+------------------------------------------------------------------+
-//| GoldScalp_EA.mq5 v1.3 - Gold Scalper (Buy Only)                 |
+//| GoldScalp_EA.mq5 v1.31 - Gold Scalper (Buy Only)                |
 //| Grid-style entries every $2.1, TP $2.1 per position              |
 //| Cost basis: $0.17 per 0.01 lot (spread + commission)             |
 //+------------------------------------------------------------------+
 #property copyright "GoldScalp"
-#property version   "1.30"
+#property version   "1.31"
 
 #include <Trade/Trade.mqh>
 
@@ -17,7 +17,7 @@ input group "=== Trade ==="
 input int      InpMagic           = 600000;
 input double   InpLotSize         = 0.01;
 input double   InpTP              = 9.2;
-input int      InpMaxPositions    = 50;
+input int      InpMaxPositions    = 30;
 input double   InpMaxSpread       = 0.50;
 
 input group "=== Entry Spacing ==="
@@ -30,6 +30,10 @@ input double   InpRSI_OB          = 75.0;
 input group "=== Session ==="
 input int      InpStartHour       = 5;
 input int      InpEndHour         = 20;
+
+input group "=== Friday Cutoff ==="
+input int      InpServerGMT       = 0;      // Server GMT offset (Exness=0)
+input int      InpFriCutoffBJ     = 24;     // Friday cutoff Beijing hour (0-24)
 
 //=====================================================================
 // GLOBALS
@@ -80,6 +84,15 @@ bool IsSessionActive()
    TimeToStruct(TimeCurrent(), dt);
    if(dt.day_of_week == 0 || dt.day_of_week == 6) return false;
    if(dt.day_of_week == 1 && dt.hour < 1) return false;
+
+   int bjHour = dt.hour + (8 - InpServerGMT);
+   int bjDow  = dt.day_of_week;
+   if(bjHour >= 24) { bjHour -= 24; bjDow = (bjDow + 1) % 7; }
+   if(bjHour < 0)   { bjHour += 24; bjDow = (bjDow + 6) % 7; }
+
+   if(bjDow == 6) return false;
+   if(bjDow == 5 && bjHour >= InpFriCutoffBJ) return false;
+
    return (dt.hour >= InpStartHour && dt.hour < InpEndHour);
 }
 
@@ -130,7 +143,7 @@ int OnInit()
       return INIT_FAILED;
    }
 
-   PrintFormat("[GS] GoldScalp v1.3 | Lot=%.2f TP=%.1f MaxPos=%d Spacing=%.1f RSI_OB=%.0f",
+   PrintFormat("[GS] GoldScalp v1.31 | Lot=%.2f TP=%.1f MaxPos=%d Spacing=%.1f RSI_OB=%.0f",
                InpLotSize, InpTP, InpMaxPositions, InpMinSpacing, InpRSI_OB);
    return INIT_SUCCEEDED;
 }
