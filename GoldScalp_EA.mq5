@@ -19,6 +19,7 @@ input double   InpLotSize         = 0.01;
 input double   InpTP              = 9.2;
 input int      InpMaxPositions    = 30;
 input double   InpMaxSpread       = 0.50;
+input double   InpMaxPrice        = 4800.0;   // Price ceiling (0=disabled)
 
 input group "=== Entry Spacing ==="
 input double   InpMinSpacing      = 1.8;
@@ -143,8 +144,8 @@ int OnInit()
       return INIT_FAILED;
    }
 
-   PrintFormat("[GS] GoldScalp v1.31 | Lot=%.2f TP=%.1f MaxPos=%d Spacing=%.1f RSI_OB=%.0f",
-               InpLotSize, InpTP, InpMaxPositions, InpMinSpacing, InpRSI_OB);
+   PrintFormat("[GS] GoldScalp v1.31 | Lot=%.2f TP=%.1f MaxPos=%d Spacing=%.1f RSI_OB=%.0f MaxPrice=%.1f",
+               InpLotSize, InpTP, InpMaxPositions, InpMinSpacing, InpRSI_OB, InpMaxPrice);
    return INIT_SUCCEEDED;
 }
 
@@ -174,6 +175,8 @@ void OnTick()
    if(rsi >= InpRSI_OB) return;
 
    double ask  = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+   if(InpMaxPrice > 0 && ask > InpMaxPrice) return;
+
    double lots = NormLot(InpLotSize);
    int    dig  = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
    double tp   = (InpTP > 0) ? NormalizeDouble(ask + InpTP, dig) : 0;
