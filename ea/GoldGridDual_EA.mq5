@@ -515,7 +515,7 @@ int OnInit()
    if(g_hATR == INVALID_HANDLE)
       Print("[GD] ATR init failed (will use fallback spacing)");
 
-   PrintFormat("[GD] GoldGridDual v1.04 | LotStep=%.2f BaseBalance=%.0f MaxBuy=%d MaxSell=%d TPActivate=%.0f TPTrailback=%.0f ATR=%s",
+   PrintFormat("[GD] GoldGridDual v1.06 | LotStep=%.2f BaseBalance=%.0f MaxBuy=%d MaxSell=%d TPActivate=%.0f TPTrailback=%.0f ATR=%s",
                InpLotStep, InpBaseBalance, InpMaxPosBuy, InpMaxPosSell,
                InpTPActivate, InpTPTrailback,
                InpUseATR ? "ON" : "OFF");
