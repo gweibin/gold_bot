@@ -341,15 +341,14 @@ void UpdateTrendFilter()
 }
 
 //=====================================================================
-// News blackout: hardcoded 2026 NFP/CPI/FOMC dates (GMT).
-// NFP/CPI: 12:25-13:05 GMT; FOMC decision day: 18:55-20:05 GMT.
+// News blackout: hardcoded 2026 NFP/CPI/FOMC dates (Exness server time GMT+3).
+// NFP/CPI: 15:25-16:05 server; FOMC decision day: 21:55-23:05 server.
 bool IsNewsBlackout()
 {
    if(!InpNewsOn) return false;
 
    MqlDateTime dt;
-   datetime gmt = TimeCurrent() + InpServerGMT * 3600;
-   TimeToStruct(gmt, dt);
+   TimeToStruct(TimeCurrent(), dt);
 
    if(dt.year != 2026) return false;
 
@@ -364,8 +363,8 @@ bool IsNewsBlackout()
    // 2026 FOMC decision days (second day of each meeting)
    static int fomc[][2] = {{1,28},{3,18},{4,29},{6,17},{7,29},{9,16},{10,28},{12,9}};
 
-   // NFP and CPI: block 12:25-13:05 GMT
-   if(hm >= 1225 && hm <= 1305)
+   // NFP and CPI: block 15:25-16:05 server time (GMT 12:25-13:05)
+   if(hm >= 1525 && hm <= 1605)
    {
       for(int i = 0; i < ArrayRange(nfp, 0); i++)
          if(nfp[i][0] == mon && nfp[i][1] == day) return true;
@@ -373,8 +372,8 @@ bool IsNewsBlackout()
          if(cpi[i][0] == mon && cpi[i][1] == day) return true;
    }
 
-   // FOMC: block 18:55-20:05 GMT
-   if(hm >= 1855 && hm <= 2005)
+   // FOMC: block 21:55-23:05 server time (GMT 18:55-20:05)
+   if(hm >= 2155 && hm <= 2305)
    {
       for(int i = 0; i < ArrayRange(fomc, 0); i++)
          if(fomc[i][0] == mon && fomc[i][1] == day) return true;
