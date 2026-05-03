@@ -1,5 +1,5 @@
 //+------------------------------------------------------------------+
-//| GoldGridDual_EA.mq5 v1.05                                        |
+//| GoldGridDual_EA.mq5 v1.06                                        |
 //| Dual-direction grid + trailing batch close                       |
 //| v1.01: direction filter — price vs N bars ago decides which side |
 //| v1.02: trend filter (displacement ratio), daily loss limit,      |
@@ -7,9 +7,10 @@
 //| v1.03: displacement ratio + entry throttle moved to M5           |
 //| v1.04: dynamic LotStep scaled to account balance                 |
 //| v1.05: remove daily loss limit (redundant with EquityBreaker)    |
+//| v1.06: news blackout uses hardcoded 2026 NFP/CPI/FOMC dates      |
 //+------------------------------------------------------------------+
 #property copyright "GoldGridDual"
-#property version   "1.05"
+#property version   "1.06"
 
 #include <Trade/Trade.mqh>
 
@@ -57,7 +58,7 @@ input double   InpFriEarlyLossPct = 15.0;   // Floating loss % of equity trigger
 
 input group "=== Equity Circuit Breaker ==="
 input bool     InpEqBreakerOn     = true;
-input double   InpEqBreakerPct    = 10.0;
+input double   InpEqBreakerPct    = 20.0;
 
 input group "=== Trend Filter ==="
 input bool     InpTrendFilterOn   = true;
@@ -340,8 +341,8 @@ void UpdateTrendFilter()
 }
 
 //=====================================================================
-// News blackout: block entries during high-impact news windows (GMT).
-// Times are approximate; adjust InpServerGMT if server is not GMT0.
+// News blackout: hardcoded 2026 NFP/CPI/FOMC dates (GMT).
+// NFP/CPI: 12:25-13:05 GMT; FOMC decision day: 18:55-20:05 GMT.
 bool IsNewsBlackout()
 {
    if(!InpNewsOn) return false;
@@ -350,16 +351,34 @@ bool IsNewsBlackout()
    datetime gmt = TimeCurrent() + InpServerGMT * 3600;
    TimeToStruct(gmt, dt);
 
-   int h = dt.hour;
-   int m = dt.min;
-   int hm = h * 100 + m;
+   if(dt.year != 2026) return false;
 
-   // US NFP: first Friday of month 12:25-13:05 GMT
-   // US CPI: varies, typically Tue/Wed 12:25-13:05 GMT
-   // FOMC:   Wed 18:55-19:05 GMT (statement), 19:25-20:05 (presser)
-   // Covers: 12:25-13:05, 18:55-20:05 GMT on weekdays
-   if(hm >= 1225 && hm <= 1305) return true;
-   if(hm >= 1855 && hm <= 2005) return true;
+   int mon = dt.mon;
+   int day = dt.day;
+   int hm  = dt.hour * 100 + dt.min;
+
+   // 2026 NFP dates (first Friday of each month)
+   static int nfp[][2] = {{1,9},{2,6},{3,6},{4,3},{5,8},{6,5},{7,2},{8,7},{9,4},{10,2},{11,6},{12,4}};
+   // 2026 CPI dates
+   static int cpi[][2] = {{1,13},{2,13},{3,11},{4,10},{5,12},{6,10},{7,14},{8,12},{9,11},{10,14},{11,10},{12,10}};
+   // 2026 FOMC decision days (second day of each meeting)
+   static int fomc[][2] = {{1,28},{3,18},{4,29},{6,17},{7,29},{9,16},{10,28},{12,9}};
+
+   // NFP and CPI: block 12:25-13:05 GMT
+   if(hm >= 1225 && hm <= 1305)
+   {
+      for(int i = 0; i < ArrayRange(nfp, 0); i++)
+         if(nfp[i][0] == mon && nfp[i][1] == day) return true;
+      for(int i = 0; i < ArrayRange(cpi, 0); i++)
+         if(cpi[i][0] == mon && cpi[i][1] == day) return true;
+   }
+
+   // FOMC: block 18:55-20:05 GMT
+   if(hm >= 1855 && hm <= 2005)
+   {
+      for(int i = 0; i < ArrayRange(fomc, 0); i++)
+         if(fomc[i][0] == mon && fomc[i][1] == day) return true;
+   }
 
    return false;
 }
