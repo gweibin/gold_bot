@@ -1,14 +1,15 @@
 //+------------------------------------------------------------------+
-//| GoldGridDual_EA.mq5 v1.04                                        |
+//| GoldGridDual_EA.mq5 v1.05                                        |
 //| Dual-direction grid + trailing batch close                       |
 //| v1.01: direction filter — price vs N bars ago decides which side |
 //| v1.02: trend filter (displacement ratio), daily loss limit,      |
 //|         news blackout, EquityBreaker lowered to 10%              |
 //| v1.03: displacement ratio + entry throttle moved to M5           |
 //| v1.04: dynamic LotStep scaled to account balance                 |
+//| v1.05: remove daily loss limit (redundant with EquityBreaker)    |
 //+------------------------------------------------------------------+
 #property copyright "GoldGridDual"
-#property version   "1.04"
+#property version   "1.05"
 
 #include <Trade/Trade.mqh>
 
@@ -58,10 +59,6 @@ input group "=== Equity Circuit Breaker ==="
 input bool     InpEqBreakerOn     = true;
 input double   InpEqBreakerPct    = 10.0;
 
-input group "=== Daily Loss Limit ==="
-input bool     InpDailyLossOn     = true;
-input double   InpDailyLossPct    = 20.0;  // Max realized loss per day (% of balance at day start)
-
 input group "=== Trend Filter ==="
 input bool     InpTrendFilterOn   = true;
 input int      InpDispBars        = 20;    // M5 bars for displacement ratio (20 bars = 100 min)
@@ -89,11 +86,6 @@ bool     g_eqHaltToday  = false;
 int      g_eqHaltDoy    = -1;
 bool     g_friHalt      = false;
 
-// Daily realized loss tracking
-double   g_dayStartBalance = 0.0;
-double   g_dayRealizedLoss = 0.0;
-bool     g_dailyLossHalt   = false;
-int      g_dailyLossDoy    = -1;
 double   g_initBalance     = 0.0;  // Fixed at OnInit, used for LotStep scaling
 
 // Trend filter state
@@ -348,39 +340,6 @@ void UpdateTrendFilter()
 }
 
 //=====================================================================
-// Daily realized loss limit.
-// Returns true if new entries should be blocked today.
-bool CheckDailyLossLimit()
-{
-   if(!InpDailyLossOn) return false;
-
-   MqlDateTime dt;
-   TimeToStruct(TimeCurrent(), dt);
-
-   // Reset on new day
-   if(g_dailyLossDoy != dt.day_of_year)
-   {
-      g_dailyLossDoy    = dt.day_of_year;
-      g_dailyLossHalt   = false;
-      g_dayRealizedLoss = 0.0;
-      g_dayStartBalance = AccountInfoDouble(ACCOUNT_BALANCE);
-   }
-
-   if(g_dailyLossHalt) return true;
-
-   if(g_dayStartBalance <= 0) return false;
-   double limitAmt = g_dayStartBalance * InpDailyLossPct / 100.0;
-   if(g_dayRealizedLoss >= limitAmt)
-   {
-      PrintFormat("[GD] DAILY LOSS LIMIT: realized=%.2f >= limit=%.2f (%.1f%%) — halted for today",
-                  g_dayRealizedLoss, limitAmt, InpDailyLossPct);
-      g_dailyLossHalt = true;
-      return true;
-   }
-   return false;
-}
-
-//=====================================================================
 // News blackout: block entries during high-impact news windows (GMT).
 // Times are approximate; adjust InpServerGMT if server is not GMT0.
 bool IsNewsBlackout()
@@ -543,10 +502,8 @@ int OnInit()
                InpTPActivate, InpTPTrailback,
                InpUseATR ? "ON" : "OFF");
 
-   // Init daily loss tracking
-   g_initBalance     = AccountInfoDouble(ACCOUNT_BALANCE);
-   g_dayStartBalance = g_initBalance;
-   g_dailyLossDoy    = -1;
+   // Init balance tracking
+   g_initBalance = AccountInfoDouble(ACCOUNT_BALANCE);
 
    return INIT_SUCCEEDED;
 }
@@ -556,34 +513,6 @@ void OnDeinit(const int reason)
 {
    if(g_hATR != INVALID_HANDLE) IndicatorRelease(g_hATR);
    Print("[GD] Stopped.");
-}
-
-//=====================================================================
-// Record realized PnL from closed deals for daily loss tracking
-void OnTradeTransaction(const MqlTradeTransaction &trans,
-                        const MqlTradeRequest     &request,
-                        const MqlTradeResult      &result)
-{
-   if(!InpDailyLossOn) return;
-   if(trans.type != TRADE_TRANSACTION_DEAL_ADD) return;
-
-   ulong dealTicket = trans.deal;
-   if(!HistoryDealSelect(dealTicket)) return;
-   if(HistoryDealGetString(dealTicket, DEAL_SYMBOL) != _Symbol) return;
-   if((long)HistoryDealGetInteger(dealTicket, DEAL_MAGIC) != InpMagic) return;
-
-   ENUM_DEAL_ENTRY entry = (ENUM_DEAL_ENTRY)HistoryDealGetInteger(dealTicket, DEAL_ENTRY);
-   if(entry != DEAL_ENTRY_OUT && entry != DEAL_ENTRY_OUT_BY) return;
-
-   double profit = HistoryDealGetDouble(dealTicket, DEAL_PROFIT)
-                 + HistoryDealGetDouble(dealTicket, DEAL_SWAP)
-                 + HistoryDealGetDouble(dealTicket, DEAL_COMMISSION);
-
-   if(profit < 0)
-   {
-      g_dayRealizedLoss += (-profit);
-      PrintFormat("[GD] Realized loss recorded: %.2f | day total: %.2f", -profit, g_dayRealizedLoss);
-   }
 }
 
 //=====================================================================
@@ -607,8 +536,7 @@ void OnTick()
    // Update trend filter on each new M5 bar (internal throttle inside)
    UpdateTrendFilter();
 
-   // Block new entries if daily loss limit hit or news blackout
-   if(CheckDailyLossLimit()) return;
+   // Block new entries during news blackout
    if(IsNewsBlackout())      return;
 
    if(!IsSpreadOK()) return;
