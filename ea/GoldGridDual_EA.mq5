@@ -1,5 +1,5 @@
 //+------------------------------------------------------------------+
-//| GoldGridDual_EA.mq5 v1.06                                        |
+//| GoldGridDual_EA.mq5 v1.07                                        |
 //| Dual-direction grid + trailing batch close                       |
 //| v1.01: direction filter — price vs N bars ago decides which side |
 //| v1.02: trend filter (displacement ratio), daily loss limit,      |
@@ -8,9 +8,10 @@
 //| v1.04: dynamic LotStep scaled to account balance                 |
 //| v1.05: remove daily loss limit (redundant with EquityBreaker)    |
 //| v1.06: news blackout uses hardcoded 2026 NFP/CPI/FOMC dates      |
+//| v1.07: trend filter replaced with net displacement in points     |
 //+------------------------------------------------------------------+
 #property copyright "GoldGridDual"
-#property version   "1.06"
+#property version   "1.07"
 
 #include <Trade/Trade.mqh>
 
@@ -62,9 +63,8 @@ input double   InpEqBreakerPct    = 20.0;
 
 input group "=== Trend Filter ==="
 input bool     InpTrendFilterOn   = true;
-input int      InpDispBars        = 20;    // M5 bars for displacement ratio (20 bars = 100 min)
-input double   InpDispThreshold   = 0.60; // Ratio above this = trending, block counter-trend entries
-input int      InpDispConfirmBars = 20;   // Consecutive M5 bars above threshold to confirm trend
+input int      InpDispBars        = 60;    // M5 bars to measure net displacement (60 bars = 5h)
+input double   InpDispDollar      = 50.0;  // Net price move ($) to confirm trend and block counter entries
 
 input group "=== News Blackout ==="
 input bool     InpNewsOn          = true;  // Enable news time blackout
@@ -90,7 +90,6 @@ bool     g_friHalt      = false;
 double   g_initBalance     = 0.0;  // Fixed at OnInit, used for LotStep scaling
 
 // Trend filter state
-int      g_dispConfirmCount = 0;  // consecutive bars with high displacement ratio
 bool     g_trendBuy         = false; // buy direction is trending (block buy entries)
 bool     g_trendSell        = false; // sell direction is trending (block sell entries)
 
@@ -277,26 +276,8 @@ double NextLot(ENUM_POSITION_TYPE type)
 }
 
 //=====================================================================
-// Displacement ratio: |net displacement| / total path over N M5 bars
-// Close to 1 = trending; close to 0 = ranging
-double CalcDisplacementRatio(int bars)
-{
-   if(bars < 2) return 0.0;
-   double closes[];
-   if(CopyClose(_Symbol, PERIOD_M5, 1, bars, closes) != bars) return 0.0;
-
-   double totalPath = 0.0;
-   for(int i = 1; i < bars; i++)
-      totalPath += MathAbs(closes[i] - closes[i-1]);
-   if(totalPath <= 0.0) return 0.0;
-
-   double netDisp = MathAbs(closes[bars-1] - closes[0]);
-   return netDisp / totalPath;
-}
-
-//=====================================================================
 // Update trend filter on each new M5 bar.
-// Sets g_trendBuy / g_trendSell based on displacement ratio + direction.
+// Blocks counter-trend entries when net displacement over InpDispBars exceeds InpDispPoints.
 void UpdateTrendFilter()
 {
    if(!InpTrendFilterOn) return;
@@ -305,38 +286,34 @@ void UpdateTrendFilter()
    if(curM5 == 0 || curM5 == g_lastBarTimeM5) return;
    g_lastBarTimeM5 = curM5;
 
-   double ratio = CalcDisplacementRatio(InpDispBars);
-
-   if(ratio >= InpDispThreshold)
+   double closes[];
+   if(CopyClose(_Symbol, PERIOD_M5, 1, InpDispBars, closes) != InpDispBars)
    {
-      g_dispConfirmCount++;
-   }
-   else
-   {
-      g_dispConfirmCount = 0;
       g_trendBuy  = false;
       g_trendSell = false;
       return;
    }
 
-   if(g_dispConfirmCount < InpDispConfirmBars) return;
-
-   // Confirmed trend — determine direction from net displacement
-   double closes[];
-   if(CopyClose(_Symbol, PERIOD_M5, 1, InpDispBars, closes) != InpDispBars) return;
    double netDisp = closes[InpDispBars-1] - closes[0];
 
-   if(netDisp < 0)
+   if(netDisp <= -InpDispDollar)
    {
+      if(!g_trendBuy)
+         PrintFormat("[GD] TREND DOWN: net=%.2f$ over %d M5 bars — BUY entries blocked", netDisp, InpDispBars);
       g_trendBuy  = true;
       g_trendSell = false;
-      PrintFormat("[GD] TREND DOWN detected (ratio=%.2f, %d M5 bars) — BUY entries blocked", ratio, g_dispConfirmCount);
+   }
+   else if(netDisp >= InpDispDollar)
+   {
+      if(!g_trendSell)
+         PrintFormat("[GD] TREND UP: net=%.2f$ over %d M5 bars — SELL entries blocked", netDisp, InpDispBars);
+      g_trendSell = true;
+      g_trendBuy  = false;
    }
    else
    {
-      g_trendSell = true;
       g_trendBuy  = false;
-      PrintFormat("[GD] TREND UP detected (ratio=%.2f, %d M5 bars) — SELL entries blocked", ratio, g_dispConfirmCount);
+      g_trendSell = false;
    }
 }
 
