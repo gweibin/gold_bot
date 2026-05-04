@@ -1,5 +1,5 @@
 //+------------------------------------------------------------------+
-//| GoldGridDual_EA.mq5 v1.07                                        |
+//| GoldGridDual_EA.mq5 v1.08                                        |
 //| Dual-direction grid + trailing batch close                       |
 //| v1.01: direction filter — price vs N bars ago decides which side |
 //| v1.02: trend filter (displacement ratio), daily loss limit,      |
@@ -9,9 +9,10 @@
 //| v1.05: remove daily loss limit (redundant with EquityBreaker)    |
 //| v1.06: news blackout uses hardcoded 2026 NFP/CPI/FOMC dates      |
 //| v1.07: trend filter replaced with net displacement in points     |
+//| v1.08: EquityBreaker uses balance (not equity) as denominator    |
 //+------------------------------------------------------------------+
 #property copyright "GoldGridDual"
-#property version   "1.07"
+#property version   "1.08"
 
 #include <Trade/Trade.mqh>
 
@@ -59,7 +60,7 @@ input double   InpFriEarlyLossPct = 15.0;   // Floating loss % of equity trigger
 
 input group "=== Equity Circuit Breaker ==="
 input bool     InpEqBreakerOn     = true;
-input double   InpEqBreakerPct    = 20.0;
+input double   InpEqBreakerPct    = 10.0;
 
 input group "=== Trend Filter ==="
 input bool     InpTrendFilterOn   = true;
@@ -375,15 +376,15 @@ bool CheckEquityBreaker()
    }
    if(g_eqHaltToday) return true;
 
-   double equity = AccountInfoDouble(ACCOUNT_EQUITY);
-   if(equity <= 0) return false;
+   double balance = AccountInfoDouble(ACCOUNT_BALANCE);
+   if(balance <= 0) return false;
    double pnl = TotalFloatingPnL();
    if(pnl >= 0) return false;
 
-   double lossPct = (-pnl) / equity * 100.0;
+   double lossPct = (-pnl) / balance * 100.0;
    if(lossPct >= InpEqBreakerPct)
    {
-      PrintFormat("[GD] EQUITY BREAKER: loss=%.2f (%.2f%%) >= %.1f%%",
+      PrintFormat("[GD] EQUITY BREAKER: loss=%.2f (%.2f%% of balance) >= %.1f%%",
                   pnl, lossPct, InpEqBreakerPct);
       CloseAllPositions("EquityBreaker");
       g_eqHaltToday = true;
@@ -422,11 +423,11 @@ bool CheckFridayForceClose()
 
    if(bjHour >= InpFriEarlyBJHour)
    {
-      double equity = AccountInfoDouble(ACCOUNT_EQUITY);
+      double balance = AccountInfoDouble(ACCOUNT_BALANCE);
       double pnl    = TotalFloatingPnL();
-      if(equity > 0 && pnl < 0)
+      if(balance > 0 && pnl < 0)
       {
-         double lossPct = (-pnl) / equity * 100.0;
+         double lossPct = (-pnl) / balance * 100.0;
          if(lossPct >= InpFriEarlyLossPct)
          {
             PrintFormat("[GD] FRIDAY EARLY CLOSE: loss=%.2f (%.2f%%)", pnl, lossPct);
@@ -492,7 +493,7 @@ int OnInit()
    if(g_hATR == INVALID_HANDLE)
       Print("[GD] ATR init failed (will use fallback spacing)");
 
-   PrintFormat("[GD] GoldGridDual v1.07 | LotStep=%.2f BaseBalance=%.0f MaxBuy=%d MaxSell=%d TPActivate=%.0f TPTrailback=%.0f ATR=%s",
+   PrintFormat("[GD] GoldGridDual v1.08 | LotStep=%.2f BaseBalance=%.0f MaxBuy=%d MaxSell=%d TPActivate=%.0f TPTrailback=%.0f ATR=%s",
                InpLotStep, InpBaseBalance, InpMaxPosBuy, InpMaxPosSell,
                InpTPActivate, InpTPTrailback,
                InpUseATR ? "ON" : "OFF");
