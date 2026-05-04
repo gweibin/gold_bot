@@ -64,7 +64,7 @@ input double   InpEqBreakerPct    = 20.0;
 input group "=== Trend Filter ==="
 input bool     InpTrendFilterOn   = true;
 input int      InpDispBars        = 60;    // M5 bars to measure net displacement (60 bars = 5h)
-input double   InpDispDollar      = 50.0;  // Net price move ($) to confirm trend and block counter entries
+input double   InpDispDollar      = 100.0;  // Net price move ($) to confirm trend and block counter entries
 
 input group "=== News Blackout ==="
 input bool     InpNewsOn          = true;  // Enable news time blackout
@@ -492,7 +492,7 @@ int OnInit()
    if(g_hATR == INVALID_HANDLE)
       Print("[GD] ATR init failed (will use fallback spacing)");
 
-   PrintFormat("[GD] GoldGridDual v1.06 | LotStep=%.2f BaseBalance=%.0f MaxBuy=%d MaxSell=%d TPActivate=%.0f TPTrailback=%.0f ATR=%s",
+   PrintFormat("[GD] GoldGridDual v1.07 | LotStep=%.2f BaseBalance=%.0f MaxBuy=%d MaxSell=%d TPActivate=%.0f TPTrailback=%.0f ATR=%s",
                InpLotStep, InpBaseBalance, InpMaxPosBuy, InpMaxPosSell,
                InpTPActivate, InpTPTrailback,
                InpUseATR ? "ON" : "OFF");
