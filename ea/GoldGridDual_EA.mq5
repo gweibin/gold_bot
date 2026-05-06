@@ -43,7 +43,7 @@ input double   InpSpacingCoef     = 0.18;      // ATR multiplier for spacing
 input double   InpSpacingMin      = 2.0;
 input double   InpSpacingMax      = 8.0;
 input double   InpFallbackSpacing = 5.0;
-input double   InpSellSpacingMult = 2.0;       // Sell grid spacing multiplier (>1 = fewer sell layers)
+input double   InpSellSpacingMult = 1.5;       // Sell grid spacing multiplier (>1 = fewer sell layers)
 
 input group "=== Trailing Batch Close ==="
 input double   InpTPActivate      = 80.0;     // Min profit to arm trailing ($)
