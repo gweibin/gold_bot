@@ -1,5 +1,5 @@
 //+------------------------------------------------------------------+
-//| GoldGridDual_EA.mq5 v1.08                                        |
+//| GoldGridDual_EA.mq5 v1.09                                        |
 //| Dual-direction grid + trailing batch close                       |
 //| v1.01: direction filter — price vs N bars ago decides which side |
 //| v1.02: trend filter (displacement ratio), daily loss limit,      |
@@ -10,9 +10,10 @@
 //| v1.06: news blackout uses hardcoded 2026 NFP/CPI/FOMC dates      |
 //| v1.07: trend filter replaced with net displacement in points     |
 //| v1.08: EquityBreaker uses balance (not equity) as denominator    |
+//| v1.09: DynamicLotStep floors at volume step to fix zero-lot bug  |
 //+------------------------------------------------------------------+
 #property copyright "GoldGridDual"
-#property version   "1.08"
+#property version   "1.09"
 
 #include <Trade/Trade.mqh>
 
@@ -265,7 +266,8 @@ double DynamicLotStep()
    double step = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
    if(step <= 0) step = 0.01;
    double raw = InpLotStep * (g_initBalance / InpBaseBalance);
-   return NormalizeDouble(MathFloor(raw / step) * step, 2);
+   double scaled = NormalizeDouble(MathFloor(raw / step) * step, 2);
+   return MathMax(step, scaled);  // floor at volume step so layering still works
 }
 
 //=====================================================================
@@ -493,7 +495,7 @@ int OnInit()
    if(g_hATR == INVALID_HANDLE)
       Print("[GD] ATR init failed (will use fallback spacing)");
 
-   PrintFormat("[GD] GoldGridDual v1.08 | LotStep=%.2f BaseBalance=%.0f MaxBuy=%d MaxSell=%d TPActivate=%.0f TPTrailback=%.0f ATR=%s",
+   PrintFormat("[GD] GoldGridDual v1.09 | LotStep=%.2f BaseBalance=%.0f MaxBuy=%d MaxSell=%d TPActivate=%.0f TPTrailback=%.0f ATR=%s",
                InpLotStep, InpBaseBalance, InpMaxPosBuy, InpMaxPosSell,
                InpTPActivate, InpTPTrailback,
                InpUseATR ? "ON" : "OFF");
