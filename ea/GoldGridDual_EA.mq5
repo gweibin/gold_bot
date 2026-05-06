@@ -1,5 +1,5 @@
 //+------------------------------------------------------------------+
-//| GoldGridDual_EA.mq5 v1.10                                        |
+//| GoldGridDual_EA.mq5 v1.11                                        |
 //| Dual-direction grid + trailing batch close                       |
 //| v1.01: direction filter — price vs N bars ago decides which side |
 //| v1.02: trend filter (displacement ratio), daily loss limit,      |
@@ -12,9 +12,10 @@
 //| v1.08: EquityBreaker uses balance (not equity) as denominator    |
 //| v1.09: DynamicLotStep floors at volume step to fix zero-lot bug  |
 //| v1.10: add InpBuyBias to skew entries toward buy side            |
+//| v1.11: daily balance refresh; lower InpDispDollar default to 70  |
 //+------------------------------------------------------------------+
 #property copyright "GoldGridDual"
-#property version   "1.10"
+#property version   "1.11"
 
 #include <Trade/Trade.mqh>
 
@@ -68,7 +69,7 @@ input double   InpEqBreakerPct    = 10.0;
 input group "=== Trend Filter ==="
 input bool     InpTrendFilterOn   = true;
 input int      InpDispBars        = 60;    // M5 bars to measure net displacement (60 bars = 5h)
-input double   InpDispDollar      = 100.0;  // Net price move ($) to confirm trend and block counter entries
+input double   InpDispDollar      = 70.0;   // Net price move ($) to confirm trend and block counter entries
 
 input group "=== News Blackout ==="
 input bool     InpNewsOn          = true;  // Enable news time blackout
@@ -91,7 +92,8 @@ bool     g_eqHaltToday  = false;
 int      g_eqHaltDoy    = -1;
 bool     g_friHalt      = false;
 
-double   g_initBalance     = 0.0;  // Fixed at OnInit, used for LotStep scaling
+double   g_initBalance     = 0.0;  // Updated daily at session start
+int      g_initBalanceDoy  = -1;   // Day-of-year when g_initBalance was last set
 
 // Trend filter state
 bool     g_trendBuy         = false; // buy direction is trending (block buy entries)
@@ -497,7 +499,7 @@ int OnInit()
    if(g_hATR == INVALID_HANDLE)
       Print("[GD] ATR init failed (will use fallback spacing)");
 
-   PrintFormat("[GD] GoldGridDual v1.10 | LotStep=%.2f BaseBalance=%.0f MaxBuy=%d MaxSell=%d TPActivate=%.0f TPTrailback=%.0f ATR=%s BuyBias=%.1f",
+   PrintFormat("[GD] GoldGridDual v1.11 | LotStep=%.2f BaseBalance=%.0f MaxBuy=%d MaxSell=%d TPActivate=%.0f TPTrailback=%.0f ATR=%s BuyBias=%.1f",
                InpLotStep, InpBaseBalance, InpMaxPosBuy, InpMaxPosSell,
                InpTPActivate, InpTPTrailback,
                InpUseATR ? "ON" : "OFF", InpBuyBias);
@@ -532,6 +534,16 @@ void OnTick()
    datetime curBar = iTime(_Symbol, PERIOD_M5, 0);
    if(curBar == 0 || curBar == g_lastBarTime) return;
    g_lastBarTime = curBar;
+
+   // Refresh balance once per day for dynamic lot/TP scaling
+   MqlDateTime dtb;
+   TimeToStruct(TimeCurrent(), dtb);
+   if(dtb.day_of_year != g_initBalanceDoy)
+   {
+      g_initBalance    = AccountInfoDouble(ACCOUNT_BALANCE);
+      g_initBalanceDoy = dtb.day_of_year;
+      PrintFormat("[GD] Balance refreshed: %.2f", g_initBalance);
+   }
 
    // Update trend filter on each new M5 bar (internal throttle inside)
    UpdateTrendFilter();
