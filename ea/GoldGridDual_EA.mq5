@@ -506,7 +506,10 @@ int OnInit()
                InpUseATR ? "ON" : "OFF", InpSellSpacingMult);
 
    // Init balance tracking
-   g_initBalance = AccountInfoDouble(ACCOUNT_BALANCE);
+   g_initBalance    = AccountInfoDouble(ACCOUNT_BALANCE);
+   MqlDateTime dtInit;
+   TimeToStruct(TimeCurrent(), dtInit);
+   g_initBalanceDoy = dtInit.day_of_year;
 
    return INIT_SUCCEEDED;
 }
