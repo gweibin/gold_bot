@@ -1,5 +1,5 @@
 //+------------------------------------------------------------------+
-//| GoldGridDual_EA.mq5 v1.09                                        |
+//| GoldGridDual_EA.mq5 v1.10                                        |
 //| Dual-direction grid + trailing batch close                       |
 //| v1.01: direction filter — price vs N bars ago decides which side |
 //| v1.02: trend filter (displacement ratio), daily loss limit,      |
@@ -11,9 +11,10 @@
 //| v1.07: trend filter replaced with net displacement in points     |
 //| v1.08: EquityBreaker uses balance (not equity) as denominator    |
 //| v1.09: DynamicLotStep floors at volume step to fix zero-lot bug  |
+//| v1.10: add InpBuyBias to skew entries toward buy side            |
 //+------------------------------------------------------------------+
 #property copyright "GoldGridDual"
-#property version   "1.09"
+#property version   "1.10"
 
 #include <Trade/Trade.mqh>
 
@@ -32,6 +33,7 @@ input double   InpMaxSpread       = 0.50;
 
 input group "=== Direction Filter ==="
 input int      InpDirBars         = 5;         // Compare current price vs N bars ago
+input double   InpBuyBias         = 0.0;       // Bias added to threshold: positive favors buy entries
 
 input group "=== Grid Spacing ==="
 input bool     InpUseATR          = true;
@@ -495,10 +497,10 @@ int OnInit()
    if(g_hATR == INVALID_HANDLE)
       Print("[GD] ATR init failed (will use fallback spacing)");
 
-   PrintFormat("[GD] GoldGridDual v1.09 | LotStep=%.2f BaseBalance=%.0f MaxBuy=%d MaxSell=%d TPActivate=%.0f TPTrailback=%.0f ATR=%s",
+   PrintFormat("[GD] GoldGridDual v1.10 | LotStep=%.2f BaseBalance=%.0f MaxBuy=%d MaxSell=%d TPActivate=%.0f TPTrailback=%.0f ATR=%s BuyBias=%.1f",
                InpLotStep, InpBaseBalance, InpMaxPosBuy, InpMaxPosSell,
                InpTPActivate, InpTPTrailback,
-               InpUseATR ? "ON" : "OFF");
+               InpUseATR ? "ON" : "OFF", InpBuyBias);
 
    // Init balance tracking
    g_initBalance = AccountInfoDouble(ACCOUNT_BALANCE);
@@ -544,9 +546,10 @@ void OnTick()
    double bid     = SymbolInfoDouble(_Symbol, SYMBOL_BID);
 
    double priceNBarsAgo = iClose(_Symbol, PERIOD_M1, InpDirBars);
+   double buyThreshold  = priceNBarsAgo + InpBuyBias;
 
    // --- Buy grid: price falling → fade with Buy ---
-   if(bid < priceNBarsAgo && !g_trendBuy)
+   if(bid < buyThreshold && !g_trendBuy)
    {
       int buyCount = CountPositions(POSITION_TYPE_BUY);
       if(buyCount < InpMaxPosBuy)
@@ -567,7 +570,7 @@ void OnTick()
    }
 
    // --- Sell grid: price rising → fade with Sell ---
-   if(bid > priceNBarsAgo && !g_trendSell)
+   if(bid > buyThreshold && !g_trendSell)
    {
       int sellCount = CountPositions(POSITION_TYPE_SELL);
       if(sellCount < InpMaxPosSell)
