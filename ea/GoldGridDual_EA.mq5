@@ -50,7 +50,7 @@ input double   InpDynSellP2       = 4850.0;    // Dynamic: price threshold 2
 input double   InpDynSellP3       = 5000.0;    // Dynamic: price threshold 3
 input double   InpDynSellM1       = 3.0;       // Dynamic: multiplier below threshold 1
 input double   InpDynSellM2       = 2.0;       // Dynamic: multiplier threshold 1-2
-input double   InpDynSellM3       = 1.5;       // Dynamic: multiplier threshold 2-3
+input double   InpDynSellM3       = 2.0;       // Dynamic: multiplier threshold 2-3
 input double   InpDynSellM4       = 1.0;       // Dynamic: multiplier above threshold 3
 
 input group "=== Trailing Batch Close ==="
