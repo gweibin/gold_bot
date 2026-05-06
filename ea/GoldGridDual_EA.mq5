@@ -33,7 +33,7 @@ input double   InpMaxSpread       = 0.50;
 
 input group "=== Direction Filter ==="
 input int      InpDirBars         = 5;         // Compare current price vs N bars ago
-input double   InpBuyBias         = 0.0;       // Bias added to threshold: positive favors buy entries
+input double   InpBuyBias         = 10.0;      // Bias added to threshold: positive favors buy entries
 
 input group "=== Grid Spacing ==="
 input bool     InpUseATR          = true;
