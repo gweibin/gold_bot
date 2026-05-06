@@ -1,5 +1,5 @@
 //+------------------------------------------------------------------+
-//| GoldGridDual_EA.mq5 v1.11                                        |
+//| GoldGridDual_EA.mq5 v1.12                                        |
 //| Dual-direction grid + trailing batch close                       |
 //| v1.01: direction filter — price vs N bars ago decides which side |
 //| v1.02: trend filter (displacement ratio), daily loss limit,      |
@@ -13,9 +13,10 @@
 //| v1.09: DynamicLotStep floors at volume step to fix zero-lot bug  |
 //| v1.10: add InpBuyBias to skew entries toward buy side            |
 //| v1.11: daily balance refresh; lower InpDispDollar default to 70  |
+//| v1.12: replace BuyBias with asymmetric sell spacing multiplier   |
 //+------------------------------------------------------------------+
 #property copyright "GoldGridDual"
-#property version   "1.11"
+#property version   "1.12"
 
 #include <Trade/Trade.mqh>
 
@@ -34,7 +35,6 @@ input double   InpMaxSpread       = 0.50;
 
 input group "=== Direction Filter ==="
 input int      InpDirBars         = 5;         // Compare current price vs N bars ago
-input double   InpBuyBias         = 10.0;      // Bias added to threshold: positive favors buy entries
 
 input group "=== Grid Spacing ==="
 input bool     InpUseATR          = true;
@@ -43,6 +43,7 @@ input double   InpSpacingCoef     = 0.18;      // ATR multiplier for spacing
 input double   InpSpacingMin      = 2.0;
 input double   InpSpacingMax      = 8.0;
 input double   InpFallbackSpacing = 5.0;
+input double   InpSellSpacingMult = 2.0;       // Sell grid spacing multiplier (>1 = fewer sell layers)
 
 input group "=== Trailing Batch Close ==="
 input double   InpTPActivate      = 80.0;     // Min profit to arm trailing ($)
@@ -499,10 +500,10 @@ int OnInit()
    if(g_hATR == INVALID_HANDLE)
       Print("[GD] ATR init failed (will use fallback spacing)");
 
-   PrintFormat("[GD] GoldGridDual v1.11 | LotStep=%.2f BaseBalance=%.0f MaxBuy=%d MaxSell=%d TPActivate=%.0f TPTrailback=%.0f ATR=%s BuyBias=%.1f",
+   PrintFormat("[GD] GoldGridDual v1.12 | LotStep=%.2f BaseBalance=%.0f MaxBuy=%d MaxSell=%d TPActivate=%.0f TPTrailback=%.0f ATR=%s SellMult=%.1f",
                InpLotStep, InpBaseBalance, InpMaxPosBuy, InpMaxPosSell,
                InpTPActivate, InpTPTrailback,
-               InpUseATR ? "ON" : "OFF", InpBuyBias);
+               InpUseATR ? "ON" : "OFF", InpSellSpacingMult);
 
    // Init balance tracking
    g_initBalance = AccountInfoDouble(ACCOUNT_BALANCE);
@@ -553,15 +554,15 @@ void OnTick()
 
    if(!IsSpreadOK()) return;
 
-   double spacing = CurrentSpacing();
-   double ask     = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
-   double bid     = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   double spacing     = CurrentSpacing();
+   double sellSpacing = spacing * InpSellSpacingMult;
+   double ask         = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+   double bid         = SymbolInfoDouble(_Symbol, SYMBOL_BID);
 
    double priceNBarsAgo = iClose(_Symbol, PERIOD_M1, InpDirBars);
-   double buyThreshold  = priceNBarsAgo + InpBuyBias;
 
    // --- Buy grid: price falling → fade with Buy ---
-   if(bid < buyThreshold && !g_trendBuy)
+   if(bid < priceNBarsAgo && !g_trendBuy)
    {
       int buyCount = CountPositions(POSITION_TYPE_BUY);
       if(buyCount < InpMaxPosBuy)
@@ -581,21 +582,21 @@ void OnTick()
       }
    }
 
-   // --- Sell grid: price rising → fade with Sell ---
-   if(bid > buyThreshold && !g_trendSell)
+   // --- Sell grid: price rising → fade with Sell (wider spacing) ---
+   if(bid > priceNBarsAgo && !g_trendSell)
    {
       int sellCount = CountPositions(POSITION_TYPE_SELL);
       if(sellCount < InpMaxPosSell)
       {
          bool canSell = (sellCount == 0) ||
-                        (NearestEntryDistance(POSITION_TYPE_SELL) >= spacing);
+                        (NearestEntryDistance(POSITION_TYPE_SELL) >= sellSpacing);
          if(canSell)
          {
             double lots = NextLot(POSITION_TYPE_SELL);
             if(g_trade.Sell(lots, _Symbol, bid, 0, 0,
                             StringFormat("GridSell_%d", sellCount + 1)))
                PrintFormat("[GD] SELL %.2f @ %.3f sp=%.2f [%d/%d]",
-                           lots, bid, spacing, sellCount + 1, InpMaxPosSell);
+                           lots, bid, sellSpacing, sellCount + 1, InpMaxPosSell);
             else
                PrintFormat("[GD] SELL FAIL: %s", g_trade.ResultRetcodeDescription());
          }
