@@ -1,5 +1,5 @@
 //+------------------------------------------------------------------+
-//| GoldGridDual_EA.mq5 v1.12                                        |
+//| GoldGridDual_EA.mq5 v1.13                                        |
 //| Dual-direction grid + trailing batch close                       |
 //| v1.01: direction filter — price vs N bars ago decides which side |
 //| v1.02: trend filter (displacement ratio), daily loss limit,      |
@@ -14,9 +14,10 @@
 //| v1.10: add InpBuyBias to skew entries toward buy side            |
 //| v1.11: daily balance refresh; lower InpDispDollar default to 70  |
 //| v1.12: replace BuyBias with asymmetric sell spacing multiplier   |
+//| v1.13: dynamic sell spacing multiplier by price level            |
 //+------------------------------------------------------------------+
 #property copyright "GoldGridDual"
-#property version   "1.12"
+#property version   "1.13"
 
 #include <Trade/Trade.mqh>
 
@@ -43,7 +44,14 @@ input double   InpSpacingCoef     = 0.18;      // ATR multiplier for spacing
 input double   InpSpacingMin      = 2.0;
 input double   InpSpacingMax      = 8.0;
 input double   InpFallbackSpacing = 5.0;
-input double   InpSellSpacingMult = 1.5;       // Sell grid spacing multiplier (>1 = fewer sell layers)
+input double   InpSellSpacingMult = 0.0;       // Sell spacing multiplier (0=dynamic by price)
+input double   InpDynSellP1       = 4700.0;    // Dynamic: price threshold 1
+input double   InpDynSellP2       = 4850.0;    // Dynamic: price threshold 2
+input double   InpDynSellP3       = 5000.0;    // Dynamic: price threshold 3
+input double   InpDynSellM1       = 3.0;       // Dynamic: multiplier below threshold 1
+input double   InpDynSellM2       = 2.0;       // Dynamic: multiplier threshold 1-2
+input double   InpDynSellM3       = 1.5;       // Dynamic: multiplier threshold 2-3
+input double   InpDynSellM4       = 1.0;       // Dynamic: multiplier above threshold 3
 
 input group "=== Trailing Batch Close ==="
 input double   InpTPActivate      = 80.0;     // Min profit to arm trailing ($)
@@ -260,6 +268,18 @@ double CurrentSpacing()
    if(atr <= 0.0) return InpFallbackSpacing;
    double s = atr * InpSpacingCoef;
    return MathMax(InpSpacingMin, MathMin(InpSpacingMax, s));
+}
+
+//=====================================================================
+// Sell spacing multiplier: fixed if InpSellSpacingMult > 0, else dynamic by price
+double SellSpacingMult()
+{
+   if(InpSellSpacingMult > 0.0) return InpSellSpacingMult;
+   double price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   if(price < InpDynSellP1)  return InpDynSellM1;
+   if(price < InpDynSellP2)  return InpDynSellM2;
+   if(price < InpDynSellP3)  return InpDynSellM3;
+   return InpDynSellM4;
 }
 
 //=====================================================================
@@ -500,10 +520,11 @@ int OnInit()
    if(g_hATR == INVALID_HANDLE)
       Print("[GD] ATR init failed (will use fallback spacing)");
 
-   PrintFormat("[GD] GoldGridDual v1.12 | LotStep=%.2f BaseBalance=%.0f MaxBuy=%d MaxSell=%d TPActivate=%.0f TPTrailback=%.0f ATR=%s SellMult=%.1f",
+   PrintFormat("[GD] GoldGridDual v1.13 | LotStep=%.2f BaseBalance=%.0f MaxBuy=%d MaxSell=%d TPActivate=%.0f TPTrailback=%.0f ATR=%s SellMult=%s",
                InpLotStep, InpBaseBalance, InpMaxPosBuy, InpMaxPosSell,
                InpTPActivate, InpTPTrailback,
-               InpUseATR ? "ON" : "OFF", InpSellSpacingMult);
+               InpUseATR ? "ON" : "OFF",
+               InpSellSpacingMult > 0 ? StringFormat("%.1f(fixed)", InpSellSpacingMult) : "dynamic");
 
    // Init balance tracking
    g_initBalance    = AccountInfoDouble(ACCOUNT_BALANCE);
@@ -558,7 +579,7 @@ void OnTick()
    if(!IsSpreadOK()) return;
 
    double spacing     = CurrentSpacing();
-   double sellSpacing = spacing * InpSellSpacingMult;
+   double sellSpacing = spacing * SellSpacingMult();
    double ask         = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
    double bid         = SymbolInfoDouble(_Symbol, SYMBOL_BID);
 
