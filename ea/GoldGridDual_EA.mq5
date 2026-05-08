@@ -1,5 +1,5 @@
 //+------------------------------------------------------------------+
-//| GoldGridDual_EA.mq5 v1.13                                        |
+//| GoldGridDual_EA.mq5 v1.15                                        |
 //| Dual-direction grid + trailing batch close                       |
 //| v1.01: direction filter — price vs N bars ago decides which side |
 //| v1.02: trend filter (displacement ratio), daily loss limit,      |
@@ -15,9 +15,11 @@
 //| v1.11: daily balance refresh; lower InpDispDollar default to 70  |
 //| v1.12: replace BuyBias with asymmetric sell spacing multiplier   |
 //| v1.13: dynamic sell spacing multiplier by price level            |
+//| v1.14: remove trend filter                                       |
+//| v1.15: fix Friday force close triggering one day early           |
 //+------------------------------------------------------------------+
 #property copyright "GoldGridDual"
-#property version   "1.13"
+#property version   "1.15"
 
 #include <Trade/Trade.mqh>
 
@@ -30,8 +32,8 @@ input group "=== Trade ==="
 input int      InpMagic           = 600030;
 input double   InpLotStep         = 0.02;      // Lot increment per layer (at base balance)
 input double   InpBaseBalance     = 20000.0;   // Reference balance for LotStep scaling
-input int      InpMaxPosBuy       = 30;        // Max Buy positions
-input int      InpMaxPosSell      = 30;        // Max Sell positions
+input int      InpMaxPosBuy       = 6;        // Max Buy positions
+input int      InpMaxPosSell      = 6;        // Max Sell positions
 input double   InpMaxSpread       = 0.50;
 
 input group "=== Direction Filter ==="
@@ -41,16 +43,16 @@ input group "=== Grid Spacing ==="
 input bool     InpUseATR          = true;
 input int      InpATR_Period      = 14;        // ATR period (M15)
 input double   InpSpacingCoef     = 0.18;      // ATR multiplier for spacing
-input double   InpSpacingMin      = 2.0;
-input double   InpSpacingMax      = 8.0;
-input double   InpFallbackSpacing = 5.0;
+input double   InpSpacingMin      = 4.0;
+input double   InpSpacingMax      = 12.0;
+input double   InpFallbackSpacing = 6.0;
 input double   InpSellSpacingMult = 0.0;       // Sell spacing multiplier (0=dynamic by price)
-input double   InpDynSellP1       = 4700.0;    // Dynamic: price threshold 1
-input double   InpDynSellP2       = 4850.0;    // Dynamic: price threshold 2
-input double   InpDynSellP3       = 5000.0;    // Dynamic: price threshold 3
+input double   InpDynSellP1       = 4800.0;    // Dynamic: price threshold 1
+input double   InpDynSellP2       = 5200.0;    // Dynamic: price threshold 2
+input double   InpDynSellP3       = 5600.0;    // Dynamic: price threshold 3
 input double   InpDynSellM1       = 3.0;       // Dynamic: multiplier below threshold 1
 input double   InpDynSellM2       = 2.0;       // Dynamic: multiplier threshold 1-2
-input double   InpDynSellM3       = 2.0;       // Dynamic: multiplier threshold 2-3
+input double   InpDynSellM3       = 1.5;       // Dynamic: multiplier threshold 2-3
 input double   InpDynSellM4       = 1.0;       // Dynamic: multiplier above threshold 3
 
 input group "=== Trailing Batch Close ==="
@@ -73,12 +75,7 @@ input double   InpFriEarlyLossPct = 15.0;   // Floating loss % of equity trigger
 
 input group "=== Equity Circuit Breaker ==="
 input bool     InpEqBreakerOn     = true;
-input double   InpEqBreakerPct    = 10.0;
-
-input group "=== Trend Filter ==="
-input bool     InpTrendFilterOn   = true;
-input int      InpDispBars        = 60;    // M5 bars to measure net displacement (60 bars = 5h)
-input double   InpDispDollar      = 70.0;   // Net price move ($) to confirm trend and block counter entries
+input double   InpEqBreakerPct    = 20.0;
 
 input group "=== News Blackout ==="
 input bool     InpNewsOn          = true;  // Enable news time blackout
@@ -89,7 +86,6 @@ input bool     InpNewsOn          = true;  // Enable news time blackout
 //=====================================================================
 CTrade   g_trade;
 datetime g_lastBarTime  = 0;   // M5 bar throttle
-datetime g_lastBarTimeM5 = 0;  // M5 bar for trend filter
 int      g_hATR         = INVALID_HANDLE;
 
 // Trailing close state per direction
@@ -103,10 +99,6 @@ bool     g_friHalt      = false;
 
 double   g_initBalance     = 0.0;  // Updated daily at session start
 int      g_initBalanceDoy  = -1;   // Day-of-year when g_initBalance was last set
-
-// Trend filter state
-bool     g_trendBuy         = false; // buy direction is trending (block buy entries)
-bool     g_trendSell        = false; // sell direction is trending (block sell entries)
 
 //=====================================================================
 double Ind(int handle, int shift)
@@ -304,48 +296,6 @@ double NextLot(ENUM_POSITION_TYPE type)
 }
 
 //=====================================================================
-// Update trend filter on each new M5 bar.
-// Blocks counter-trend entries when net displacement over InpDispBars exceeds InpDispPoints.
-void UpdateTrendFilter()
-{
-   if(!InpTrendFilterOn) return;
-
-   datetime curM5 = iTime(_Symbol, PERIOD_M5, 0);
-   if(curM5 == 0 || curM5 == g_lastBarTimeM5) return;
-   g_lastBarTimeM5 = curM5;
-
-   double closes[];
-   if(CopyClose(_Symbol, PERIOD_M5, 1, InpDispBars, closes) != InpDispBars)
-   {
-      g_trendBuy  = false;
-      g_trendSell = false;
-      return;
-   }
-
-   double netDisp = closes[InpDispBars-1] - closes[0];
-
-   if(netDisp <= -InpDispDollar)
-   {
-      if(!g_trendBuy)
-         PrintFormat("[GD] TREND DOWN: net=%.2f$ over %d M5 bars — BUY entries blocked", netDisp, InpDispBars);
-      g_trendBuy  = true;
-      g_trendSell = false;
-   }
-   else if(netDisp >= InpDispDollar)
-   {
-      if(!g_trendSell)
-         PrintFormat("[GD] TREND UP: net=%.2f$ over %d M5 bars — SELL entries blocked", netDisp, InpDispBars);
-      g_trendSell = true;
-      g_trendBuy  = false;
-   }
-   else
-   {
-      g_trendBuy  = false;
-      g_trendSell = false;
-   }
-}
-
-//=====================================================================
 // News blackout: hardcoded 2026 NFP/CPI/FOMC dates (Exness server time GMT+3).
 // NFP/CPI: 15:25-16:05 server; FOMC decision day: 21:55-23:05 server.
 bool IsNewsBlackout()
@@ -437,7 +387,9 @@ bool CheckFridayForceClose()
    if(g_friHalt) return true;
 
    // Trigger on BJ Saturday early hours (covers GMT Fri night session)
-   bool isFriSat = (bjDow == 5 || (bjDow == 6 && bjHour <= 6));
+   MqlDateTime dtSrv;
+   TimeToStruct(TimeCurrent(), dtSrv);
+   bool isFriSat = (dtSrv.day_of_week == 5 || (dtSrv.day_of_week == 6 && bjHour <= 6));
    if(!isFriSat) return false;
 
    if(bjHour >= InpFriCloseBJHour)
@@ -520,7 +472,7 @@ int OnInit()
    if(g_hATR == INVALID_HANDLE)
       Print("[GD] ATR init failed (will use fallback spacing)");
 
-   PrintFormat("[GD] GoldGridDual v1.13 | LotStep=%.2f BaseBalance=%.0f MaxBuy=%d MaxSell=%d TPActivate=%.0f TPTrailback=%.0f ATR=%s SellMult=%s",
+   PrintFormat("[GD] GoldGridDual v1.14 | LotStep=%.2f BaseBalance=%.0f MaxBuy=%d MaxSell=%d TPActivate=%.0f TPTrailback=%.0f ATR=%s SellMult=%s",
                InpLotStep, InpBaseBalance, InpMaxPosBuy, InpMaxPosSell,
                InpTPActivate, InpTPTrailback,
                InpUseATR ? "ON" : "OFF",
@@ -570,9 +522,6 @@ void OnTick()
       PrintFormat("[GD] Balance refreshed: %.2f", g_initBalance);
    }
 
-   // Update trend filter on each new M5 bar (internal throttle inside)
-   UpdateTrendFilter();
-
    // Block new entries during news blackout
    if(IsNewsBlackout())      return;
 
@@ -586,7 +535,7 @@ void OnTick()
    double priceNBarsAgo = iClose(_Symbol, PERIOD_M1, InpDirBars);
 
    // --- Buy grid: price falling → fade with Buy ---
-   if(bid < priceNBarsAgo && !g_trendBuy)
+   if(bid < priceNBarsAgo)
    {
       int buyCount = CountPositions(POSITION_TYPE_BUY);
       if(buyCount < InpMaxPosBuy)
@@ -607,7 +556,7 @@ void OnTick()
    }
 
    // --- Sell grid: price rising → fade with Sell (wider spacing) ---
-   if(bid > priceNBarsAgo && !g_trendSell)
+   if(bid > priceNBarsAgo)
    {
       int sellCount = CountPositions(POSITION_TYPE_SELL);
       if(sellCount < InpMaxPosSell)
