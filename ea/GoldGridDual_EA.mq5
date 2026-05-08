@@ -1,5 +1,5 @@
 //+------------------------------------------------------------------+
-//| GoldGridDual_EA.mq5 v1.15                                        |
+//| GoldGridDual_EA.mq5 v1.18                                        |
 //| Dual-direction grid + trailing batch close                       |
 //| v1.01: direction filter — price vs N bars ago decides which side |
 //| v1.02: trend filter (displacement ratio), daily loss limit,      |
@@ -17,9 +17,12 @@
 //| v1.13: dynamic sell spacing multiplier by price level            |
 //| v1.14: remove trend filter                                       |
 //| v1.15: fix Friday force close triggering one day early           |
+//| v1.16: add InpBuySpacingMult2 for back-half Buy layer spacing    |
+//| v1.17: fix IsSessionActive blocking Friday due to BJ timezone    |
+//| v1.18: remove early close; stop new entries 1h before Fri close  |
 //+------------------------------------------------------------------+
 #property copyright "GoldGridDual"
-#property version   "1.15"
+#property version   "1.18"
 
 #include <Trade/Trade.mqh>
 
@@ -30,11 +33,12 @@
 //=====================================================================
 input group "=== Trade ==="
 input int      InpMagic           = 600030;
-input double   InpLotStep         = 0.02;      // Lot increment per layer (at base balance)
+input double   InpLotStep         = 0.01;      // Lot increment per layer (at base balance)
 input double   InpBaseBalance     = 20000.0;   // Reference balance for LotStep scaling
-input int      InpMaxPosBuy       = 6;        // Max Buy positions
-input int      InpMaxPosSell      = 6;        // Max Sell positions
+input int      InpMaxPosBuy       = 10;        // Max Buy positions
+input int      InpMaxPosSell      = 10;        // Max Sell positions
 input double   InpMaxSpread       = 0.50;
+input double   InpBuySpacingMult2 = 2.0;       // Spacing multiplier for back half of Buy layers
 
 input group "=== Direction Filter ==="
 input int      InpDirBars         = 5;         // Compare current price vs N bars ago
@@ -63,15 +67,11 @@ input group "=== Session ==="
 input int      InpStartHour       = 5;
 input int      InpEndHour         = 20;
 
-input group "=== Friday Cutoff ==="
-input int      InpServerGMT       = 0;
-input int      InpFriCutoffBJ     = 24;
-
 input group "=== Friday Force Close ==="
 input bool     InpFriForceOn      = true;
-input int      InpFriCloseBJHour  = 5;      // BJ hour (Sat) to force close; GMT0 Fri 21:00
-input int      InpFriEarlyBJHour  = 4;      // BJ hour (Sat) for early close if loss exceeds threshold
-input double   InpFriEarlyLossPct = 15.0;   // Floating loss % of equity triggering early close
+input int      InpServerGMT       = 0;        // Server timezone offset (GMT)
+input int      InpFriCloseBJHour  = 7;      // BJ hour (Sat) to force close; GMT0 Fri 23:00
+input int      InpFriStopBJHour   = 6;      // BJ hour (Sat) to stop new entries; GMT0 Fri 22:00
 
 input group "=== Equity Circuit Breaker ==="
 input bool     InpEqBreakerOn     = true;
@@ -156,8 +156,7 @@ bool IsSessionActive()
 
    int bjHour, bjDow;
    ServerToBJ(bjHour, bjDow);
-   if(bjDow == 6) return false;
-   if(bjDow == 5 && bjHour >= InpFriCutoffBJ) return false;
+   if(dt.day_of_week == 5 && bjHour >= InpFriStopBJHour) return false;
 
    return (dt.hour >= InpStartHour && dt.hour < InpEndHour);
 }
@@ -379,42 +378,25 @@ bool CheckFridayForceClose()
    int bjHour, bjDow;
    ServerToBJ(bjHour, bjDow);
 
-   if(g_friHalt && bjDow != 5 && bjDow != 6)
+   MqlDateTime dtFri;
+   TimeToStruct(TimeCurrent(), dtFri);
+   if(g_friHalt && dtFri.day_of_week != 5 && dtFri.day_of_week != 6)
    {
       g_friHalt = false;
       Print("[GD] Friday halt reset.");
    }
    if(g_friHalt) return true;
 
-   // Trigger on BJ Saturday early hours (covers GMT Fri night session)
-   MqlDateTime dtSrv;
-   TimeToStruct(TimeCurrent(), dtSrv);
-   bool isFriSat = (dtSrv.day_of_week == 5 || (dtSrv.day_of_week == 6 && bjHour <= 6));
+   // Trigger only on server Friday
+   bool isFriSat = (dtFri.day_of_week == 5);
    if(!isFriSat) return false;
 
    if(bjHour >= InpFriCloseBJHour)
    {
-      PrintFormat("[GD] FRIDAY FORCE CLOSE (BJ Fri %02d:00)", bjHour);
+      PrintFormat("[GD] FRIDAY FORCE CLOSE (BJ Sat %02d:00)", bjHour);
       CloseAllPositions("FridayForceClose");
       g_friHalt = true;
       return true;
-   }
-
-   if(bjHour >= InpFriEarlyBJHour)
-   {
-      double balance = AccountInfoDouble(ACCOUNT_BALANCE);
-      double pnl    = TotalFloatingPnL();
-      if(balance > 0 && pnl < 0)
-      {
-         double lossPct = (-pnl) / balance * 100.0;
-         if(lossPct >= InpFriEarlyLossPct)
-         {
-            PrintFormat("[GD] FRIDAY EARLY CLOSE: loss=%.2f (%.2f%%)", pnl, lossPct);
-            CloseAllPositions("FridayEarlyClose");
-            g_friHalt = true;
-            return true;
-         }
-      }
    }
    return false;
 }
@@ -472,7 +454,7 @@ int OnInit()
    if(g_hATR == INVALID_HANDLE)
       Print("[GD] ATR init failed (will use fallback spacing)");
 
-   PrintFormat("[GD] GoldGridDual v1.14 | LotStep=%.2f BaseBalance=%.0f MaxBuy=%d MaxSell=%d TPActivate=%.0f TPTrailback=%.0f ATR=%s SellMult=%s",
+   PrintFormat("[GD] GoldGridDual v1.18 | LotStep=%.2f BaseBalance=%.0f MaxBuy=%d MaxSell=%d TPActivate=%.0f TPTrailback=%.0f ATR=%s SellMult=%s",
                InpLotStep, InpBaseBalance, InpMaxPosBuy, InpMaxPosSell,
                InpTPActivate, InpTPTrailback,
                InpUseATR ? "ON" : "OFF",
@@ -540,15 +522,16 @@ void OnTick()
       int buyCount = CountPositions(POSITION_TYPE_BUY);
       if(buyCount < InpMaxPosBuy)
       {
+         double buySpacing = (buyCount >= InpMaxPosBuy / 2) ? spacing * InpBuySpacingMult2 : spacing;
          bool canBuy = (buyCount == 0) ||
-                       (NearestEntryDistance(POSITION_TYPE_BUY) >= spacing);
+                       (NearestEntryDistance(POSITION_TYPE_BUY) >= buySpacing);
          if(canBuy)
          {
             double lots = NextLot(POSITION_TYPE_BUY);
             if(g_trade.Buy(lots, _Symbol, ask, 0, 0,
                            StringFormat("GridBuy_%d", buyCount + 1)))
                PrintFormat("[GD] BUY %.2f @ %.3f sp=%.2f [%d/%d]",
-                           lots, ask, spacing, buyCount + 1, InpMaxPosBuy);
+                           lots, ask, buySpacing, buyCount + 1, InpMaxPosBuy);
             else
                PrintFormat("[GD] BUY FAIL: %s", g_trade.ResultRetcodeDescription());
          }
