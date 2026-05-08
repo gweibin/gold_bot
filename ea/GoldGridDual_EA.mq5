@@ -1,5 +1,5 @@
 //+------------------------------------------------------------------+
-//| GoldGridDual_EA.mq5 v1.18                                        |
+//| GoldGridDual_EA.mq5 v1.19                                        |
 //| Dual-direction grid + trailing batch close                       |
 //| v1.01: direction filter — price vs N bars ago decides which side |
 //| v1.02: trend filter (displacement ratio), daily loss limit,      |
@@ -20,9 +20,10 @@
 //| v1.16: add InpBuySpacingMult2 for back-half Buy layer spacing    |
 //| v1.17: fix IsSessionActive blocking Friday due to BJ timezone    |
 //| v1.18: remove early close; stop new entries 1h before Fri close  |
+//| v1.19: use server time directly for Friday logic, remove BJ tz   |
 //+------------------------------------------------------------------+
 #property copyright "GoldGridDual"
-#property version   "1.18"
+#property version   "1.19"
 
 #include <Trade/Trade.mqh>
 
@@ -35,10 +36,10 @@ input group "=== Trade ==="
 input int      InpMagic           = 600030;
 input double   InpLotStep         = 0.01;      // Lot increment per layer (at base balance)
 input double   InpBaseBalance     = 20000.0;   // Reference balance for LotStep scaling
-input int      InpMaxPosBuy       = 10;        // Max Buy positions
-input int      InpMaxPosSell      = 10;        // Max Sell positions
+input int      InpMaxPosBuy       = 12;        // Max Buy positions
+input int      InpMaxPosSell      = 12;        // Max Sell positions
 input double   InpMaxSpread       = 0.50;
-input double   InpBuySpacingMult2 = 2.0;       // Spacing multiplier for back half of Buy layers
+input double   InpBuySpacingMult2 = 1.5;       // Spacing multiplier for back half of Buy layers
 
 input group "=== Direction Filter ==="
 input int      InpDirBars         = 5;         // Compare current price vs N bars ago
@@ -69,12 +70,11 @@ input int      InpEndHour         = 20;
 
 input group "=== Friday Force Close ==="
 input bool     InpFriForceOn      = true;
-input int      InpServerGMT       = 0;        // Server timezone offset (GMT)
-input int      InpFriCloseBJHour  = 7;      // BJ hour (Sat) to force close; GMT0 Fri 23:00
-input int      InpFriStopBJHour   = 6;      // BJ hour (Sat) to stop new entries; GMT0 Fri 22:00
+input int      InpFriCloseHour    = 23;     // Server hour to force close on Friday
+input int      InpFriStopHour     = 22;     // Server hour to stop new entries on Friday
 
 input group "=== Equity Circuit Breaker ==="
-input bool     InpEqBreakerOn     = true;
+input bool     InpEqBreakerOn     = false;
 input double   InpEqBreakerPct    = 20.0;
 
 input group "=== News Blackout ==="
@@ -136,27 +136,13 @@ bool IsSpreadOK()
 }
 
 //=====================================================================
-void ServerToBJ(int &bjHour, int &bjDow)
-{
-   MqlDateTime dt;
-   TimeToStruct(TimeCurrent(), dt);
-   bjHour = dt.hour + (8 - InpServerGMT);
-   bjDow  = dt.day_of_week;
-   if(bjHour >= 24) { bjHour -= 24; bjDow = (bjDow + 1) % 7; }
-   if(bjHour < 0)   { bjHour += 24; bjDow = (bjDow + 6) % 7; }
-}
-
-//=====================================================================
 bool IsSessionActive()
 {
    MqlDateTime dt;
    TimeToStruct(TimeCurrent(), dt);
    if(dt.day_of_week == 0 || dt.day_of_week == 6) return false;
    if(dt.day_of_week == 1 && dt.hour < 1) return false;
-
-   int bjHour, bjDow;
-   ServerToBJ(bjHour, bjDow);
-   if(dt.day_of_week == 5 && bjHour >= InpFriStopBJHour) return false;
+   if(dt.day_of_week == 5 && dt.hour >= InpFriStopHour) return false;
 
    return (dt.hour >= InpStartHour && dt.hour < InpEndHour);
 }
@@ -375,9 +361,6 @@ bool CheckFridayForceClose()
 {
    if(!InpFriForceOn) return false;
 
-   int bjHour, bjDow;
-   ServerToBJ(bjHour, bjDow);
-
    MqlDateTime dtFri;
    TimeToStruct(TimeCurrent(), dtFri);
    if(g_friHalt && dtFri.day_of_week != 5 && dtFri.day_of_week != 6)
@@ -387,13 +370,11 @@ bool CheckFridayForceClose()
    }
    if(g_friHalt) return true;
 
-   // Trigger only on server Friday
-   bool isFriSat = (dtFri.day_of_week == 5);
-   if(!isFriSat) return false;
+   if(dtFri.day_of_week != 5) return false;
 
-   if(bjHour >= InpFriCloseBJHour)
+   if(dtFri.hour >= InpFriCloseHour)
    {
-      PrintFormat("[GD] FRIDAY FORCE CLOSE (BJ Sat %02d:00)", bjHour);
+      PrintFormat("[GD] FRIDAY FORCE CLOSE (server %02d:00)", dtFri.hour);
       CloseAllPositions("FridayForceClose");
       g_friHalt = true;
       return true;
@@ -454,7 +435,7 @@ int OnInit()
    if(g_hATR == INVALID_HANDLE)
       Print("[GD] ATR init failed (will use fallback spacing)");
 
-   PrintFormat("[GD] GoldGridDual v1.18 | LotStep=%.2f BaseBalance=%.0f MaxBuy=%d MaxSell=%d TPActivate=%.0f TPTrailback=%.0f ATR=%s SellMult=%s",
+   PrintFormat("[GD] GoldGridDual v1.19 | LotStep=%.2f BaseBalance=%.0f MaxBuy=%d MaxSell=%d TPActivate=%.0f TPTrailback=%.0f ATR=%s SellMult=%s",
                InpLotStep, InpBaseBalance, InpMaxPosBuy, InpMaxPosSell,
                InpTPActivate, InpTPTrailback,
                InpUseATR ? "ON" : "OFF",
